@@ -56,8 +56,8 @@ class RunAgent extends Command
                         }
                         $path = $directory.'/'.$run['id'].'.json';
                         if (! is_file($path)) {
-                            $this->persist($path, ['status' => 'unknown', 'exit_code' => null]);
-                            $result = $this->option('inventory-only') ? ['status' => 'rejected', 'exit_code' => null] : $executor->execute($run);
+                            $this->persist($path, ['status' => 'unknown', 'exit_code' => null, 'output' => '']);
+                            $result = $this->option('inventory-only') ? ['status' => 'rejected', 'exit_code' => null, 'output' => ''] : $executor->execute($run);
                             $this->persist($path, $result);
                         }
                         $this->flush($directory, $instance, $client);
