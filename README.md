@@ -31,10 +31,10 @@ LENS_PROJECT_ID=project_xxxxx
 LENS_API_KEY=your_api_key
 LENS_SIGNING_SECRET=your_signing_secret
 LENS_ENDPOINT=https://basicxii-lens.test
-CLOUD_SECURITY_TIMEOUT=5
-CLOUD_SECURITY_CONNECT_TIMEOUT=3
-CLOUD_SECURITY_RETRY=0
-CLOUD_SECURITY_ENABLED=true
+LENS_TIMEOUT=5
+LENS_CONNECT_TIMEOUT=3
+LENS_RETRY=0
+LENS_ENABLED=true
 ```
 
 The application origin defaults to `APP_URL`; override with `CLOUD_SECURITY_ORIGIN`. Supply a root HTTP/HTTPS origin, without paths, query strings, fragments, or embedded credentials. API-key IDs are extracted automatically; no fifth credential environment variable is needed.
@@ -57,7 +57,7 @@ All methods enforce the same policies. `allowed()` describes only successful res
 php artisan lens:connect --token=your_workspace_token
 ```
 
-The command verifies the configured project connection and returns a nonzero exit code on failure. Existing `CLOUD_SECURITY_*` names remain supported as a migration fallback. `cloud-security:test` remains available as a compatibility alias.
+The command verifies the configured project connection and returns a nonzero exit code on failure. `cloud-security:test` remains available as a compatibility alias.
 
 ## Exceptions and transport
 
@@ -72,7 +72,7 @@ Catch `BasicXII\CloudSecurity\Exceptions\CloudSecurityException` or one of its s
 
 Messages never echo remote response bodies or credentials; underlying transport exceptions are not chained. Do not log your configuration, HTTP request objects or environment values.
 
-HTTPS and certificate verification are mandatory by default. `CLOUD_SECURITY_ALLOW_INSECURE_LOCAL=true` permits HTTP in Laravel local/testing environments only; `CLOUD_SECURITY_VERIFY_SSL=false` also requires that opt-in. Neither flag permits insecure production/staging transport. Retries are limited to transient network/server failures, use fresh nonce/signature values, and never retry authentication or policy rejection. Total elapsed time can include all configured attempts and connection timeouts.
+HTTPS and certificate verification are mandatory by default. `LENS_ALLOW_INSECURE_LOCAL=true` permits HTTP in Laravel local/testing environments only; `LENS_VERIFY_SSL=false` also requires that opt-in. Neither flag permits insecure production/staging transport. Retries are limited to transient network/server failures, use fresh nonce/signature values, and never retry authentication or policy rejection. Total elapsed time can include all configured attempts and connection timeouts.
 
 A Laravel application using `config:cache` must rebuild configuration after changing credentials. Store secrets in environment/deployment secret management, never in source control.
 
