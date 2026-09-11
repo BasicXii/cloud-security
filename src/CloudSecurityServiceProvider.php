@@ -2,6 +2,8 @@
 
 namespace BasicXII\CloudSecurity;
 
+use BasicXII\CloudSecurity\Commands\Connect;
+use BasicXII\CloudSecurity\Commands\Install;
 use BasicXII\CloudSecurity\Commands\RunAgent;
 use BasicXII\CloudSecurity\Commands\TestConnection;
 use Illuminate\Contracts\Config\Repository;
@@ -22,7 +24,7 @@ class CloudSecurityServiceProvider extends ServiceProvider
     {
         if ($this->app->runningInConsole()) {
             $this->publishes([__DIR__.'/../config/cloud-security.php' => config_path('cloud-security.php')], 'cloud-security-config');
-            $this->commands([TestConnection::class, RunAgent::class]);
+            $this->commands([Install::class, Connect::class, TestConnection::class, RunAgent::class]);
         }
     }
 }

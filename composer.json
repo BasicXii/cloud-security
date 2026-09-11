@@ -24,7 +24,8 @@
                 "BasicXII\\CloudSecurity\\CloudSecurityServiceProvider"
             ],
             "aliases": {
-                "CloudSecurity": "BasicXII\\CloudSecurity\\Facades\\CloudSecurity"
+                "CloudSecurity": "BasicXII\\CloudSecurity\\Facades\\CloudSecurity",
+                "Lens": "BasicXII\\CloudSecurity\\Facades\\Lens"
             }
         }
     },

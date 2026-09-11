@@ -1,6 +1,6 @@
 # basicxii/cloud-security
 
-Laravel client for the Cloud Security machine authentication protocol. Supports configuration discovery, a facade, typed successful results, redacted exceptions and `cloud-security:test`.
+Laravel client for the BasicXII Lens machine authentication protocol. Supports configuration discovery, a facade, typed successful results, redacted exceptions and the `lens:*` commands.
 
 ## Install
 
@@ -23,10 +23,14 @@ This source has not been published. To test it locally, add a Composer `path` re
 The path is an example relative to the customer application's composer.json. Run `composer update basicxii/cloud-security` after adding it. Laravel auto-discovers the service provider.
 
 ```ini
-CLOUD_SECURITY_URL=https://security.example.com
-CLOUD_SECURITY_PROJECT_ID=prj_YOUR_PROJECT_ID
-CLOUD_SECURITY_API_KEY=cs_live_YOUR_CREDENTIAL
-CLOUD_SECURITY_SIGNING_SECRET=css_YOUR_SIGNING_SECRET
+LENS_PROJECT_ID=project_xxxxx
+LENS_API_KEY=your_api_key
+LENS_SIGNING_SECRET=your_signing_secret
+LENS_ENDPOINT=https://basicxii-lens.test
+LENS_PROJECT_ID=project_xxxxx
+LENS_API_KEY=your_api_key
+LENS_SIGNING_SECRET=your_signing_secret
+LENS_ENDPOINT=https://basicxii-lens.test
 CLOUD_SECURITY_TIMEOUT=5
 CLOUD_SECURITY_CONNECT_TIMEOUT=3
 CLOUD_SECURITY_RETRY=0
@@ -36,24 +40,24 @@ CLOUD_SECURITY_ENABLED=true
 The application origin defaults to `APP_URL`; override with `CLOUD_SECURITY_ORIGIN`. Supply a root HTTP/HTTPS origin, without paths, query strings, fragments, or embedded credentials. API-key IDs are extracted automatically; no fifth credential environment variable is needed.
 
 ```php
-use BasicXII\CloudSecurity\Facades\CloudSecurity;
+use BasicXII\CloudSecurity\Facades\Lens;
 
-$result = CloudSecurity::verify();
+$result = Lens::verify();
 if ($result->allowed()) {
     // The central service authenticated this project.
 }
 
-$name = CloudSecurity::project()->projectName;
-CloudSecurity::ping();
+$name = Lens::project()->projectName;
+Lens::ping();
 ```
 
 All methods enforce the same policies. `allowed()` describes only successful results; failures throw exceptions and never silently authorize.
 
 ```sh
-php artisan cloud-security:test
+php artisan lens:connect --token=your_workspace_token
 ```
 
-The command validates configuration, verifies the connection, prints the project name and authentication/IP/domain/signing checks, and returns a nonzero exit code on failure. Policies disabled on the server print `Not enforced`.
+The command verifies the configured project connection and returns a nonzero exit code on failure. Existing `CLOUD_SECURITY_*` names remain supported as a migration fallback. `cloud-security:test` remains available as a compatibility alias.
 
 ## Exceptions and transport
 
@@ -83,16 +87,16 @@ php artisan vendor:publish --tag=cloud-security-config
 ```
 
 ```ini
-CLOUD_SECURITY_AGENT_ENABLED=true
-CLOUD_SECURITY_INSTANCE=portal-api
+LENS_AGENT_ENABLED=true
+LENS_INSTANCE=portal-api
 ```
 
 Approve exact Artisan argument lists in `config/cloud-security.php`. The default action list is empty. The cloud can select an approved action but cannot supply arguments, options, executable paths or shell syntax:
 
 ```php
 'agent' => [
-    'enabled' => env('CLOUD_SECURITY_AGENT_ENABLED', false),
-    'instance' => env('CLOUD_SECURITY_INSTANCE', 'default'),
+    'enabled' => env('LENS_AGENT_ENABLED', false),
+    'instance' => env('LENS_INSTANCE', 'default'),
     'timeout' => 300, // Hard process timeout, maximum 3600 seconds.
     'actions' => [
         'health' => ['about', '--only=environment'],
@@ -105,11 +109,11 @@ Preserve the other published settings, including the optional `background_logs` 
 
 ```sh
 php artisan config:clear
-php artisan cloud-security:agent --once
+php artisan lens:agent --once
 # Or publish inventory with execution disabled for this synchronization:
-php artisan cloud-security:agent --inventory-only
+php artisan lens:agent --inventory-only
 # Keep the agent running under Supervisor, systemd or a dedicated Docker service:
-php artisan cloud-security:agent
+php artisan lens:agent
 ```
 
 For Portal, run these inside `docker exec -it api bash`. A supervised process synchronizes every 15 seconds when idle. Alternatively, schedule `cloud-security:agent --once` with `withoutOverlapping()` every minute. Use persistent `storage/app/cloud-security-agent`, one agent process per instance, and a distinct instance name per server. Separate hosts must not share one instance identity. The local journal lock prevents overlapping agents on the same persistent filesystem.

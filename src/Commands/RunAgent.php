@@ -11,20 +11,20 @@ use Throwable;
 
 class RunAgent extends Command
 {
-    protected $signature = 'cloud-security:agent {--once : Sync and process at most one remote action} {--inventory-only : Sync without claiming work}';
+    protected $signature = 'cloud-security:agent|lens:agent {--once : Sync and process at most one remote action} {--inventory-only : Sync without claiming work}';
 
     protected $description = 'Publish operational inventory and execute locally approved cloud actions';
 
     public function handle(CloudSecurityClient $client, Inventory $inventory, Executor $executor): int
     {
         if (config('cloud-security.agent.enabled') !== true) {
-            $this->error('Enable CLOUD_SECURITY_AGENT_ENABLED and grant this API key the agent ability first.');
+            $this->error('Enable LENS_AGENT_ENABLED and grant this API key the agent ability first.');
 
             return self::FAILURE;
         }
         $instance = config('cloud-security.agent.instance', 'default');
         if (! is_string($instance) || ! preg_match('/^[a-zA-Z0-9_-]{1,80}$/D', $instance)) {
-            $this->error('CLOUD_SECURITY_INSTANCE must contain 1–80 letters, digits, underscores or hyphens.');
+            $this->error('LENS_INSTANCE must contain 1–80 letters, digits, underscores or hyphens.');
 
             return self::FAILURE;
         }

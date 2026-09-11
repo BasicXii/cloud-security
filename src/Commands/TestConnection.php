@@ -9,7 +9,7 @@ use Symfony\Component\Console\Formatter\OutputFormatter;
 
 class TestConnection extends Command
 {
-    protected $signature = 'cloud-security:test';
+    protected $signature = 'cloud-security:test|lens:test';
 
     protected $description = 'Verify the Cloud Security connection, credentials, and security policies';
 
