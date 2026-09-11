@@ -33,11 +33,29 @@ class CloudSecurityClient
         return $this->send('GET', '/api/v1/client/project');
     }
 
-    private function send(string $method, string $path): VerificationResult
+    /** @param array<string, mixed> $payload
+     * @return array<string, mixed>
+     */
+    public function agent(string $operation, array $payload): array
+    {
+        if ($operation !== 'poll' && ! preg_match('/^runs\/[0-9A-HJKMNP-TV-Z]{26}$/Di', $operation)) {
+            throw new ProtocolException('Invalid agent operation.');
+        }
+
+        return $this->send('POST', '/api/v1/client/agent/'.$operation, $payload);
+    }
+
+    /** @param array<string, mixed>|null $payload
+     * @return VerificationResult|array<string, mixed>
+     */
+    private function send(string $method, string $path, ?array $payload = null): VerificationResult|array
     {
         $settings = $this->settings();
-        $body = $method === 'POST' ? '[]' : '';
-        $attempts = $settings['retry'] + 1;
+        if ($payload !== null && $settings['signing_secret'] === '') {
+            throw new ConfigurationException('The agent requires a signing secret.');
+        }
+        $body = $payload !== null ? json_encode($payload, JSON_THROW_ON_ERROR) : ($method === 'POST' ? '[]' : '');
+        $attempts = $payload !== null ? 1 : $settings['retry'] + 1;
         for ($attempt = 0; $attempt < $attempts; $attempt++) {
             $timestamp = (string) time();
             $nonce = (string) Str::uuid();
@@ -82,6 +100,14 @@ class CloudSecurityClient
                 throw new ProtocolException('Cloud Security returned an unexpected response.');
             }
             $data = $response->json('data');
+            if ($payload !== null) {
+                $canonical = implode("\n", ['cloud-security-agent-v1', $nonce, hash('sha256', $response->body())]);
+                if (! is_array($data) || ! hash_equals(hash_hmac('sha256', $canonical, $settings['signing_secret']), $response->header('X-Cloud-Response-Signature'))) {
+                    throw new ProtocolException('The agent response signature is invalid.');
+                }
+
+                return $data;
+            }
             if (! is_array($data) || ($data['allowed'] ?? null) !== true || ! is_array($data['project'] ?? null)
                 || ($data['project']['id'] ?? null) !== $settings['project_id'] || ! is_string($data['project']['name'] ?? null)
                 || ! is_array($data['checks'] ?? null)) {
