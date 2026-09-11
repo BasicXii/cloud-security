@@ -1,0 +1,34 @@
+{
+    "name": "basicxii/cloud-security",
+    "description": "Signed project authentication for Laravel applications.",
+    "type": "library",
+    "license": "MIT",
+    "require": {
+        "php": "^8.2",
+        "illuminate/config": "^11.0 || ^12.0 || ^13.0",
+        "illuminate/http": "^11.0 || ^12.0 || ^13.0",
+        "illuminate/support": "^11.0 || ^12.0 || ^13.0",
+        "illuminate/console": "^11.0 || ^12.0 || ^13.0"
+    },
+    "require-dev": {
+        "phpunit/phpunit": "^11.0 || ^12.0 || ^13.0"
+    },
+    "autoload": {
+        "psr-4": {
+            "BasicXII\\CloudSecurity\\": "src/"
+        }
+    },
+    "extra": {
+        "laravel": {
+            "providers": [
+                "BasicXII\\CloudSecurity\\CloudSecurityServiceProvider"
+            ],
+            "aliases": {
+                "CloudSecurity": "BasicXII\\CloudSecurity\\Facades\\CloudSecurity"
+            }
+        }
+    },
+    "scripts": {
+        "test": "phpunit"
+    }
+}
