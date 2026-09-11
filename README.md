@@ -57,7 +57,7 @@ All methods enforce the same policies. `allowed()` describes only successful res
 php artisan lens:connect --token=your_workspace_token
 ```
 
-The command verifies the configured project connection and returns a nonzero exit code on failure. `cloud-security:test` remains available as a compatibility alias.
+The command verifies the configured project connection and returns a nonzero exit code on failure. `lens:test` is the standard command name.
 
 ## Exceptions and transport
 
@@ -116,7 +116,7 @@ php artisan lens:agent --inventory-only
 php artisan lens:agent
 ```
 
-For Portal, run these inside `docker exec -it api bash`. A supervised process synchronizes every 15 seconds when idle. Alternatively, schedule `cloud-security:agent --once` with `withoutOverlapping()` every minute. Use persistent `storage/app/cloud-security-agent`, one agent process per instance, and a distinct instance name per server. Separate hosts must not share one instance identity. The local journal lock prevents overlapping agents on the same persistent filesystem.
+For Portal, run these inside `docker exec -it api bash`. A supervised process synchronizes every 15 seconds when idle. Alternatively, schedule `lens:agent --once` with `withoutOverlapping()` every minute. Use persistent `storage/app/cloud-security-agent`, one agent process per instance, and a distinct instance name per server. Separate hosts must not share one instance identity. The local journal lock prevents overlapping agents on the same persistent filesystem.
 
 Run requests require project manager access, expire after five minutes if unclaimed, and are delivered once. A definition changed locally is rejected. Runs execute immediately, outside the scheduler, so scheduler `when()` filters, timing and overlap locks do not apply; commands that can overlap scheduled work must implement their own shared business lock. Only pending cloud requests can be cancelled. Terminating a running command requires local process supervision.
 

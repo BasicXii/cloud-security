@@ -15,7 +15,9 @@ class ActionCatalog
             if (! is_string($id) || ! preg_match('/^[a-zA-Z0-9_-]{1,80}$/D', $id)
                 || ! is_array($argv) || ! array_is_list($argv) || count($argv) < 1 || count($argv) > 50
                 || count(array_filter($argv, fn ($part) => is_string($part) && strlen($part) <= 1000 && ! str_contains($part, "\0"))) !== count($argv)
-                || ! isset(Artisan::all()[$argv[0]]) || str_starts_with($argv[0], 'cloud-security:')) {
+                || ! isset(Artisan::all()[$argv[0]])
+                || str_starts_with($argv[0], 'lens:')
+                || str_starts_with($argv[0], 'cloud-security:')) {
                 throw new ConfigurationException('An approved agent action has an invalid definition.');
             }
             $actions[$id] = ['argv' => $argv, 'command' => $argv[0],
