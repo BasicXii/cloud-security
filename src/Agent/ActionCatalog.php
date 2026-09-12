@@ -18,7 +18,7 @@ class ActionCatalog
                 || ! isset(Artisan::all()[$argv[0]])
                 || str_starts_with($argv[0], 'lens:')
                 || str_starts_with($argv[0], 'cloud-security:')) {
-                throw new ConfigurationException('An approved agent action has an invalid definition.');
+                throw new ConfigurationException(json_encode(['test' => $argv[0]]));
             }
             $actions[$id] = ['argv' => $argv, 'command' => $argv[0],
                 'fingerprint' => hash('sha256', json_encode($argv, JSON_THROW_ON_ERROR))];

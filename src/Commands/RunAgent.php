@@ -4,14 +4,18 @@ namespace BasicXII\CloudSecurity\Commands;
 
 use BasicXII\CloudSecurity\Agent\Executor;
 use BasicXII\CloudSecurity\Agent\Inventory;
+use BasicXII\CloudSecurity\Agent\QueuedExecution;
 use BasicXII\CloudSecurity\CloudSecurityClient;
+use BasicXII\CloudSecurity\Exceptions\ConfigurationException;
 use Illuminate\Console\Command;
 use RuntimeException;
 use Throwable;
 
 class RunAgent extends Command
 {
-    protected $signature = 'cloud-security:agent|lens:agent {--once : Sync and process at most one remote action} {--inventory-only : Sync without claiming work}';
+    protected $signature = 'lens:agent {--once : Sync and process or dispatch at most one remote action} {--inventory-only : Sync without claiming work}';
+
+    protected $aliases = ['cloud-security:agent'];
 
     protected $description = 'Publish operational inventory and execute locally approved cloud actions';
 
@@ -57,8 +61,23 @@ class RunAgent extends Command
                         $path = $directory.'/'.$run['id'].'.json';
                         if (! is_file($path)) {
                             $this->persist($path, ['status' => 'unknown', 'exit_code' => null, 'output' => '']);
-                            $result = $this->option('inventory-only') ? ['status' => 'rejected', 'exit_code' => null, 'output' => ''] : $executor->execute($run);
-                            $this->persist($path, $result);
+                            if ($this->option('inventory-only')) {
+                                $this->persist($path, ['status' => 'rejected', 'exit_code' => null, 'output' => '']);
+                            } elseif (config('cloud-security.agent.execution', 'process') === 'queue') {
+                                try {
+                                    $queued = app(QueuedExecution::class);
+                                    $receipt = $queued->prepare($run, $executor);
+                                    $this->persist($path, ['queued' => $receipt]);
+                                    $queued->dispatch($receipt);
+                                } catch (ConfigurationException) {
+                                    $this->persist($path, ['status' => 'rejected', 'exit_code' => null,
+                                        'output' => 'Check the approved action, asynchronous queue connection and shared result cache configuration.']);
+                                }
+                            } elseif (config('cloud-security.agent.execution', 'process') === 'process') {
+                                $this->persist($path, $executor->execute($run));
+                            } else {
+                                $this->persist($path, ['status' => 'rejected', 'exit_code' => null, 'output' => 'Unsupported agent execution mode.']);
+                            }
                         }
                         $this->flush($directory, $instance, $client);
                     }
@@ -108,6 +127,13 @@ class RunAgent extends Command
     {
         foreach (glob($directory.'/*.json') ?: [] as $path) {
             $result = json_decode(file_get_contents($path), true, 512, JSON_THROW_ON_ERROR);
+            if (isset($result['queued'])) {
+                $result = app(QueuedExecution::class)->result($result['queued']);
+                if ($result === null) {
+                    continue;
+                }
+                $this->persist($path, $result);
+            }
             $client->agent('runs/'.basename($path, '.json'), ['instance' => $instance, ...$result]);
             unlink($path);
         }

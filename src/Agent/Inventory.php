@@ -10,7 +10,7 @@ use Throwable;
 
 class Inventory
 {
-    public function __construct(private ActionCatalog $catalog) {}
+    public function __construct(private ActionCatalog $catalog, private DependencyAudit $audits) {}
 
     /** @return array<string, mixed> */
     public function collect(): array
@@ -45,11 +45,13 @@ class Inventory
         }
 
         return ['runtime' => ['php' => PHP_VERSION, 'laravel' => app()->version(),
-            'environment' => (string) config('app.env'), 'queue' => (string) config('queue.default')],
+            'environment' => (string) config('app.env'), 'queue' => (string) config('queue.default'),
+            'execution' => (string) config('cloud-security.agent.execution', 'process'),
+            'execution_queue' => mb_substr((string) config('cloud-security.agent.dispatch.queue', 'lens-commands'), 0, 100)],
             'commands' => array_slice($commands, 0, 1000), 'schedules' => array_slice($schedules, 0, 500),
             'routes' => array_slice($routes, 0, 2000), 'jobs' => $jobs, 'failed_jobs' => $failed,
             'checks' => $checks, 'actions' => $actions, 'limits' => $limits,
-            'findings' => $this->sourceReview(), 'components' => $this->components()];
+            'findings' => $this->sourceReview(), 'components' => $this->components(), 'audits' => $this->audits->collect()];
     }
 
     /** @return list<array{path: string, line: int, rule: string}> */
@@ -179,7 +181,7 @@ class Inventory
             $check('Injection', 'review', 'Source review lists raw query and process call locations for manual review. Heuristics can miss vulnerabilities and flag safe code. Source code is not uploaded.'),
             $check('Insecure design', 'review', 'Review tenant boundaries, business rules, abuse cases and least privilege. This requires application-specific review.'),
             $check('Security misconfiguration', config('app.debug') ? 'warning' : 'pass', 'Debug mode is '.(config('app.debug') ? 'enabled' : 'disabled').'.'),
-            $check('Vulnerable and outdated components', 'review', 'Run composer audit and the frontend package audit in your build pipeline. Version inventory is not a vulnerability scan.'),
+            $check('Vulnerable and outdated components', 'review', 'Review the Dependency audits tab for client Composer and npm findings, scan status and upgrade guidance. Also audit dependencies in your build pipeline.'),
             $check('Identification and authentication failures', config('session.http_only') ? 'pass' : 'warning', 'HttpOnly session cookie: '.(config('session.http_only') ? 'enabled' : 'disabled').'. Review MFA and login throttling separately.'),
             $check('Software and data integrity failures', is_file(base_path('composer.lock')) ? 'pass' : 'warning', 'Composer lockfile: '.(is_file(base_path('composer.lock')) ? 'present' : 'missing').'. Review CI and artifact provenance separately.'),
             $check('Security logging and monitoring failures', 'review', 'Inspect failed jobs and cloud audit events. Verify alert delivery and retention in your environment.'),

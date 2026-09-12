@@ -15,9 +15,8 @@ class Executor
      */
     public function execute(array $run): array
     {
-        $action = $this->catalog->all()[$run['action'] ?? ''] ?? null;
-        if (! $action || ! is_string($run['fingerprint'] ?? null) || ! hash_equals($action['fingerprint'], $run['fingerprint'])
-            || ! is_int($run['expires_at'] ?? null) || $run['expires_at'] <= time()) {
+        $action = $this->approved($run);
+        if ($action === null) {
             return ['status' => 'rejected', 'exit_code' => null, 'output' => ''];
         }
         try {
@@ -32,5 +31,19 @@ class Executor
         } catch (Throwable) {
             return ['status' => 'failed', 'exit_code' => null, 'output' => ''];
         }
+    }
+
+    /** @param array<string, mixed> $run
+     * @return array{argv: list<string>, fingerprint: string, command: string}|null
+     */
+    public function approved(array $run): ?array
+    {
+        $action = $this->catalog->all()[$run['action'] ?? ''] ?? null;
+        if (! $action || ! is_string($run['fingerprint'] ?? null) || ! hash_equals($action['fingerprint'], $run['fingerprint'])
+            || ! is_int($run['expires_at'] ?? null) || $run['expires_at'] <= time()) {
+            return null;
+        }
+
+        return $action;
     }
 }

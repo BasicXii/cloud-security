@@ -5,6 +5,19 @@ return [
         'enabled' => env('LENS_AGENT_ENABLED', false),
         'instance' => env('LENS_INSTANCE', 'default'),
         'timeout' => 300,
+        'execution' => env('LENS_AGENT_EXECUTION', 'process'),
+        'dispatch' => [
+            'connection' => env('LENS_AGENT_QUEUE_CONNECTION', 'redis'),
+            'queue' => env('LENS_AGENT_QUEUE', 'lens-commands'),
+            'result_store' => env('LENS_AGENT_RESULT_STORE', 'redis'),
+            'wait_timeout' => (int) env('LENS_AGENT_WAIT_TIMEOUT', 900),
+        ],
+        'audit' => [
+            'enabled' => env('LENS_AUDIT_ENABLED', true),
+            'composer_binary' => env('LENS_COMPOSER_BINARY', 'composer'),
+            'npm_binary' => env('LENS_NPM_BINARY', 'npm'),
+            'cache_store' => 'file',
+        ],
         // Exact Artisan argument vectors, approved locally. No shell expressions or remote parameters.
         // 'actions' => ['health' => ['about', '--only=environment']],
         'actions' => [],
