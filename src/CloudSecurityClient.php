@@ -9,6 +9,7 @@ use BasicXII\CloudSecurity\Exceptions\ConfigurationException;
 use BasicXII\CloudSecurity\Exceptions\ConnectionException;
 use BasicXII\CloudSecurity\Exceptions\ProtocolException;
 use BasicXII\CloudSecurity\Exceptions\RateLimitException;
+use BasicXII\CloudSecurity\Scanner\ReportPayload;
 use Illuminate\Contracts\Config\Repository;
 use Illuminate\Http\Client\ConnectionException as HttpConnectionException;
 use Illuminate\Http\Client\Factory;
@@ -43,6 +44,14 @@ class CloudSecurityClient
         }
 
         return $this->send('POST', '/api/v1/client/agent/'.$operation, $payload);
+    }
+
+    /** @param array<string, mixed> $report
+     * @return array<string, mixed>
+     */
+    public function scan(array $report): array
+    {
+        return $this->send('POST', '/api/v1/client/scans', ['report' => ReportPayload::validate($report)]);
     }
 
     /** @param array<string, mixed>|null $payload

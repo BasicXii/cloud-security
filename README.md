@@ -184,3 +184,70 @@ php vendor/bin/phpunit -c packages/cloud-security-laravel/phpunit.xml
 The package declares PHP 8.2+ and Illuminate 11/12/13; Composer enforces each Illuminate version's own PHP requirements. Tests in this workspace run on PHP 8.5 and Illuminate 13. Run the supported version matrix before publishing a release.
 
 See the central repository's `API.md` for the exact canonical signing format and `SECURITY.md` for trust assumptions.
+
+## Local malware scanning — Phase 1
+
+The scanner runs in the customer application. It uses PHP tokenization and SHA-256; it does not include, require, evaluate, decompress, or execute the files it inspects. No native scanner, subprocess, queue worker, or extra Composer dependency is required by this scanner.
+
+The Composer name remains `basicxii/cloud-security`; this change does not publish or rename it to `basicxii/lens`. Install this package in the customer application using the existing installation instructions above. Existing Lens project credentials and an API key with the `agent` ability are required to synchronize. The first valid scan registers an agent using the configured `LENS_INSTANCE`. Registration does not publish the operational inventory or claim remote commands.
+
+```sh
+php artisan lens:scan
+php artisan lens:scan --quick
+php artisan lens:scan --full
+php artisan lens:scan --local
+php artisan lens:scan --sync
+```
+
+- Default and quick scans hash every eligible file and analyze new or modified files. They do not trust size and modification time as proof that content is unchanged.
+- Full scans analyze all eligible files again, including unchanged files. A bundled analyzer version change also invalidates the analysis cache.
+- `--local` stores the metadata report without network access. `--sync` retries pending reports without inspecting files again.
+- A scan that exceeds limits or encounters unreadable, unstable, binary, or symbolic-link entries reports `incomplete`. Its previous baseline remains intact. A nonzero exit status indicates incomplete coverage or scan/synchronization failure; a successful exit does not mean that no findings were detected.
+
+Configuration is under `cloud-security.scanner` in the published customer configuration:
+
+```php
+'scanner' => [
+    'max_files' => 20000,
+    'max_file_bytes' => 524288,
+    'timeout' => 120,
+    'disclose_paths' => true,
+],
+```
+
+Limits have hard ceilings: 50,000 eligible files, 2 MiB per file, a 3,600-second cooperative deadline, 64 nested directory separators, 200 transmitted findings per report, and 100 pending reports. The file-size ceiling is a bound on input, not total tokenizer memory. The deadline is checked between traversal and file operations; PHP cannot interrupt a blocked filesystem read portably. Lower limits for memory-constrained hosts. Reports with more than 200 findings are explicitly incomplete and preserve the earlier baseline; the first 200 findings and total observed count are retained. Complete lossless multi-batch finding delivery remains future work.
+
+Phase 1 discovers `.php`, `.php0`–`.php9`, `.phtml`, `.phar`, and `.inc` files throughout the project, including vendor files and PHP files in storage. It excludes directories named `.git`, `node_modules`, and `basicxii-lens`, and ignores `.env`, `.env.*`, common private-key names, `.pem`, `.key`, `.crt`, and `.cer` files before reading. Symbolic links are not followed and are reported as skipped coverage. Binary PHP candidates, including binary PHARs, are skipped; archive extraction and PHP hidden inside other extensions are not implemented. Compiled Blade views are not flagged solely because they are in `storage/framework/views`.
+
+Local state lives in `storage/basicxii-lens/<project-and-instance-hash>/`. Back up this directory and keep it outside the web server's document root, with private filesystem permissions. Linux permissions are requested as 0700 for newly created directories and 0600 for state files; Windows deployments must enforce appropriate ACLs. Use stable persistent storage and a separate instance identifier for each independently scanned deployment. Do not share one baseline across unrelated container filesystems.
+
+The first complete scan creates an **observation baseline**, not a trusted-clean baseline. Records contain opaque path HMACs, content hashes, sizes, and timestamps. Authenticated state envelopes, atomic file replacement, and a local process lock protect against accidental corruption and overlapping writers. Reports are committed before the baseline and retained until a signed cloud acknowledgement arrives. If a response is lost, retrying the same local report ID is idempotent; a different report with the same ID is rejected. A full spool fails explicitly rather than deleting older reports. Changing project or instance configuration selects a different local state directory.
+
+## Cloud scan contract
+
+`POST /api/v1/client/scans` accepts a single `report` object. It reuses the existing project token, agent ability, timestamp, nonce, HMAC signature, revocation, IP/domain policies and rate limiting. Successful responses use the existing signed agent response envelope. Scan IDs are unique per registered agent and local report ID. No caller-supplied project or database agent ID is accepted; both are derived from authenticated credentials and instance.
+
+The report contains `instance`, `local_id`, `status`, `mode`, `rules_version`, `scanned_at`, `summary`, and `findings`. Findings contain only `file_id`, optional `relative_path`, `sha256`, `rule_id`, `line`, `severity`, and `risk_score`. The client checks this closed schema before HTTP serialization, and the server validates it again. Unknown source/evidence fields and uploads are rejected. There is no arbitrary metadata JSON field and no source-upload endpoint. Disable `disclose_paths` when filenames themselves may reveal sensitive information. Hashes are fingerprints and should still be treated as sensitive metadata.
+
+The cloud stores bounded reports in `security_scans`, linked to `project_agents`, rather than creating duplicate project/authentication infrastructure. The project Malware scans page uses the existing project policy, pagination, and shared UI components. It shows report history, heuristic findings, coverage, initial baseline status, and measured request-body bytes. Body bytes are not total network bandwidth: headers, TLS, retries, and other agent traffic add overhead. An unchanged scan sends a small summary with an empty finding list, not its baseline or file inventory.
+
+Quick reports are deltas. An empty delta does **not** resolve earlier findings. Phase 1 stores historical observations; a persistent finding workflow, deduplicated alerts, false-positive handling, and automatic resolution are not implemented. The scanner privacy statement applies to this scan protocol. The existing optional operational agent can transmit inventory and approved-command output and must be assessed separately before making platform-wide privacy claims.
+
+## Architecture review and next phases
+
+The proposed local inspection / cloud correlation boundary is appropriate, with these corrections:
+
+1. Tokenization is lexical analysis, not proof of data flow. Phase 1 identifies evaluation, process calls, decoding/evaluation co-occurrence, and PHP in public upload directories. Process calls alone are low-risk review signals, not malware verdicts. Advanced rules need scope-aware assignment/flow analysis, alias handling and tested false-positive behavior. [PHP tokenizer reference](https://www.php.net/manual/en/function.token-get-all.php).
+2. The sample `$c = "e"."val"; $c($b);` does not dynamically invoke the `eval` language construct. Also, string evaluation by `assert()` was removed in PHP 8. Detection rules must respect the target PHP version. [Variable functions](https://www.php.net/manual/en/functions.variable-functions.php), [assert](https://www.php.net/manual/en/function.assert.php).
+3. Compiled Blade views normally contain PHP. Their directory alone is not evidence of compromise. Use deployment context and behavioral evidence before scoring them. [Laravel Blade documentation](https://laravel.com/docs/13.x/blade).
+4. A local HMAC key cannot protect against an attacker controlling both the agent and its filesystem. Neither baseline signatures nor cloud checksums prove a compromised agent is telling the truth. Future trusted baseline approval should originate from a known-good deployment and be audited; cloud-triggered baseline rebuilding must never silently accept compromise.
+5. Artisan bootstraps the customer application before invoking a command. Although the scanner never executes inspected files, it cannot guarantee that compromised application bootstrap code is not run. A future standalone Composer binary that bypasses application bootstrap would provide a stronger boundary.
+6. Merkle trees can compact comparisons but cannot discover changed content without trustworthy leaf updates or reading the files. Avoid claiming that a cached root eliminates disk inspection.
+7. Composer installation alone cannot schedule work. An existing scheduler trigger, hosting control-panel scheduled task, or manual invocation is still required. Automatic polling and remote scan orchestration are deferred. No schedules or queue jobs are installed automatically. [Laravel scheduling](https://laravel.com/docs/13.x/scheduling).
+8. Before accepting cloud rule packs, pin verification keys, sign exact bytes or a specified canonical format, enforce monotonically increasing versions and compatibility, define key rotation/revocation and stale-cache policy, and bound every rule operation. Signed declarative rules can still cause resource exhaustion. Phase 1 accepts no downloaded rules.
+9. Quarantine requires explicit local authorization, path containment, a fresh expected hash, race handling, rollback, and a location that cannot be served or interpreted as PHP. Removing executable permission alone does not prevent a PHP interpreter from reading a file. Phase 1 never changes inspected files.
+10. Public `.env` exposure cannot be conclusively established from local existence alone. A network check risks transmitting contents and is excluded here. Cloud request/response-body logging and third-party telemetry must also honor the metadata-only boundary.
+
+Signed rules, genuine taint analysis, resumable multi-batch delivery, exclusions with versioned scan scope, independently trusted baselines, finding correlation, remote orchestration, quarantine, alerts, Merkle synchronization, and AI explanations remain subsequent phases. CI should exercise the package across the PHP/Laravel versions advertised by its Composer manifest and Linux/Windows before publishing; local Windows validation is not proof of every hosting platform.
+
+Cloud deployment needs the new migration and rebuilt frontend assets. Client deployment needs the updated package; no package was published by this change.

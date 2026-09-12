@@ -1,6 +1,12 @@
 <?php
 
 return [
+    'scanner' => [
+        'max_files' => 20000,
+        'max_file_bytes' => 524288,
+        'timeout' => 120,
+        'disclose_paths' => true,
+    ],
     'agent' => [
         'enabled' => env('LENS_AGENT_ENABLED', false),
         'instance' => env('LENS_INSTANCE', 'default'),
