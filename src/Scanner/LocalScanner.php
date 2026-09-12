@@ -27,6 +27,7 @@ class LocalScanner
         $rulesVersion = $pack?->name() ?? PhpAnalyzer::VERSION;
         $previous = $baseline['files'] ?? [];
         $summary = array_fill_keys(['discovered', 'inspected', 'unchanged', 'new', 'modified', 'deleted', 'skipped', 'findings'], 0);
+        $skippedFiles = [];
         $summary['baseline_created'] = $baseline === null;
         $summary['rules_status'] = $pack === null ? 'bundled' : ($pack->expiresAt <= time() ? 'stale' : 'verified');
         $files = [];
@@ -38,12 +39,14 @@ class LocalScanner
         foreach ($this->discover($root, '', $discoverySkipped, $deadline) as $path => $absolute) {
             if ($summary['discovered'] >= $maximum || microtime(true) >= $deadline) {
                 $summary['skipped']++;
+                $this->recordSkipped($skippedFiles, $path, 'scan_limit_reached', $limits);
                 break;
             }
             $summary['discovered']++;
             $resolved = realpath($absolute);
             if ($resolved === false || ! str_starts_with($resolved, rtrim($root, DIRECTORY_SEPARATOR).DIRECTORY_SEPARATOR)) {
                 $summary['skipped']++;
+                $this->recordSkipped($skippedFiles, $path, 'unsafe_path', $limits);
 
                 continue;
             }
@@ -51,6 +54,7 @@ class LocalScanner
             $before = @stat($absolute);
             if ($before === false || $before['size'] > $sizeLimit || is_link($absolute)) {
                 $summary['skipped']++;
+                $this->recordSkipped($skippedFiles, $path, $before === false ? 'unreadable_metadata' : ($before['size'] > $sizeLimit ? 'file_too_large' : 'symbolic_link'), $limits);
 
                 continue;
             }
@@ -61,6 +65,7 @@ class LocalScanner
             if ($source === false || strlen($source) > $sizeLimit || $after === false
                 || array_intersect_key($before, $stableFields) !== array_intersect_key($after, $stableFields) || str_contains($source, "\0")) {
                 $summary['skipped']++;
+                $this->recordSkipped($skippedFiles, $path, $source === false ? 'unreadable' : (is_string($source) && str_contains($source, "\0") ? 'binary_content' : 'file_changed_during_scan'), $limits);
 
                 continue;
             }
@@ -77,6 +82,7 @@ class LocalScanner
                 $analysis = $this->analyzer->analyze($source, $path, $pack, $baseline !== null && $event === 'new');
             } catch (Throwable) {
                 $summary['skipped']++;
+                $this->recordSkipped($skippedFiles, $path, 'analysis_failed', $limits);
 
                 continue;
             }
@@ -90,6 +96,7 @@ class LocalScanner
             }
         }
         $summary['skipped'] += $discoverySkipped;
+        $summary['skipped_files'] = $skippedFiles;
         $complete = $summary['skipped'] === 0 && $summary['findings'] <= 200;
         $summary['baseline_created'] = $baseline === null && $complete;
         if ($complete) {
@@ -106,6 +113,16 @@ class LocalScanner
         }
 
         return $report;
+    }
+
+    /** @param list<array{path: ?string, reason: string}> $skippedFiles */
+    private function recordSkipped(array &$skippedFiles, string $path, string $reason, array $limits): void
+    {
+        if (count($skippedFiles) >= 100) {
+            return;
+        }
+        $safePath = ($limits['disclose_paths'] ?? true) && strlen($path) <= 300 ? $path : null;
+        $skippedFiles[] = ['path' => $safePath, 'reason' => $reason];
     }
 
     /** @return Generator<string, string> */
