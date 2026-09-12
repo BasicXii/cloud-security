@@ -23,6 +23,26 @@ class ActionCatalog
             $actions[$id] = ['argv' => $argv, 'command' => $argv[0],
                 'fingerprint' => hash('sha256', json_encode($argv, JSON_THROW_ON_ERROR))];
         }
+        if (config('cloud-security.agent.discover_project_actions', false)) {
+            foreach (Artisan::all() as $command => $instance) {
+                if (isset($actions[$command]) || str_starts_with($command, 'lens:') || str_starts_with($command, 'cloud-security:')) {
+                    continue;
+                }
+                try {
+                    $reflection = new \ReflectionClass($instance);
+                    $file = $reflection->getFileName();
+                } catch (\ReflectionException) {
+                    $file = false;
+                }
+                if (! is_string($file) || ! str_starts_with(realpath($file) ?: '', rtrim(base_path('app'), DIRECTORY_SEPARATOR).DIRECTORY_SEPARATOR)) {
+                    continue;
+                }
+                $id = 'discovered-'.preg_replace('/[^a-zA-Z0-9_-]+/', '-', $command);
+                $argv = [$command];
+                $actions[$id] = ['argv' => $argv, 'command' => $command,
+                    'fingerprint' => hash('sha256', json_encode($argv, JSON_THROW_ON_ERROR))];
+            }
+        }
         if (count($actions) > 100) {
             throw new ConfigurationException('At most 100 remote actions may be approved.');
         }

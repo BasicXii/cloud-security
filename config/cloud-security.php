@@ -13,6 +13,7 @@ return [
     'agent' => [
         'enabled' => env('LENS_AGENT_ENABLED', false),
         'instance' => env('LENS_INSTANCE', 'default'),
+        'discover_project_actions' => env('LENS_AGENT_DISCOVER_PROJECT_ACTIONS', false),
         'timeout' => 300,
         'execution' => env('LENS_AGENT_EXECUTION', 'process'),
         'dispatch' => [
