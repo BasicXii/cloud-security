@@ -18,7 +18,14 @@ class Inventory
         $limits = ['Inventory is bounded: 1000 commands, 500 schedules, 2000 routes and the latest 50 queue records.'];
         $commands = [];
         foreach (Artisan::all() as $name => $command) {
-            $commands[] = ['name' => substr($name, 0, 160), 'description' => mb_substr($command->getDescription(), 0, 300)];
+            $category = 'vendor';
+            try {
+                $file = (new \ReflectionClass($command))->getFileName() ?: '';
+                $category = str_starts_with(realpath($file) ?: '', rtrim(app_path(), DIRECTORY_SEPARATOR).DIRECTORY_SEPARATOR)
+                    ? 'project' : (str_contains(str_replace('\\', '/', $file), '/vendor/laravel/') ? 'laravel' : 'vendor');
+            } catch (Throwable) {
+            }
+            $commands[] = ['name' => substr($name, 0, 160), 'description' => mb_substr($command->getDescription(), 0, 300), 'category' => $category];
         }
         $schedules = [];
         $background = $this->backgroundLogs();
