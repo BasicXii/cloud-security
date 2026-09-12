@@ -11,7 +11,7 @@ class LocalScanner
 {
     public function __construct(private PhpAnalyzer $analyzer) {}
 
-    /** @param array{max_files?: int, max_file_bytes?: int, timeout?: int, disclose_paths?: bool} $limits
+    /** @param array{max_files?: int, max_file_bytes?: int, timeout?: int, disclose_paths?: bool, excluded_directories?: list<string>} $limits
      * @return array<string, mixed>
      */
     public function scan(string $root, LocalState $state, string $instance, bool $full = false, array $limits = [], ?RulePack $pack = null): array
@@ -36,7 +36,8 @@ class LocalScanner
         $maximum = max(1, min(50000, $limits['max_files'] ?? 20000));
         $sizeLimit = max(1, min(2097152, $limits['max_file_bytes'] ?? 524288));
         $discoverySkipped = 0;
-        foreach ($this->discover($root, '', $discoverySkipped, $deadline) as $path => $absolute) {
+        $excludedDirectories = array_values(array_filter(array_map(fn ($value) => trim((string) $value), $limits['excluded_directories'] ?? [])));
+        foreach ($this->discover($root, '', $discoverySkipped, $deadline, $excludedDirectories) as $path => $absolute) {
             if ($summary['discovered'] >= $maximum || microtime(true) >= $deadline) {
                 $summary['skipped']++;
                 $this->recordSkipped($skippedFiles, $path, 'scan_limit_reached', $limits);
@@ -126,7 +127,7 @@ class LocalScanner
     }
 
     /** @return Generator<string, string> */
-    private function discover(string $root, string $relative, int &$skipped, float $deadline): Generator
+    private function discover(string $root, string $relative, int &$skipped, float $deadline, array $excludedDirectories = []): Generator
     {
         if (substr_count($relative, '/') >= 64) {
             $skipped++;
@@ -134,8 +135,9 @@ class LocalScanner
             return;
         }
         try {
-            $iterator = new FilesystemIterator($root.($relative !== '' ? '/'.$relative : ''), FilesystemIterator::SKIP_DOTS);
-            foreach ($iterator as $file) {
+            $entries = iterator_to_array(new FilesystemIterator($root.($relative !== '' ? '/'.$relative : ''), FilesystemIterator::SKIP_DOTS), false);
+            usort($entries, fn ($left, $right) => $this->priority($left) <=> $this->priority($right) ?: strcasecmp($left->getFilename(), $right->getFilename()));
+            foreach ($entries as $file) {
                 if (! $file instanceof \SplFileInfo) {
                     throw new RuntimeException('Unexpected filesystem entry.');
                 }
@@ -147,6 +149,7 @@ class LocalScanner
                 $name = $file->getFilename();
                 $path = $relative !== '' ? $relative.'/'.$name : $name;
                 if (in_array($name, ['.git', 'node_modules', 'basicxii-lens'], true)
+                    || in_array($path, $excludedDirectories, true) || in_array($name, $excludedDirectories, true)
                     || preg_match('/^(?:\.env(?:\..*)?|id_rsa|id_ed25519)$|\.(?:pem|key|crt|cer)$/i', $name)) {
                     continue;
                 }
@@ -156,7 +159,7 @@ class LocalScanner
                     continue;
                 }
                 if ($file->isDir()) {
-                    yield from $this->discover($root, $path, $skipped, $deadline);
+                    yield from $this->discover($root, $path, $skipped, $deadline, $excludedDirectories);
                 } elseif ($file->isFile() && preg_match('/\.(?:php[0-9]?|phtml|phar|inc)$/i', $name)) {
                     yield $path => $file->getPathname();
                 }
@@ -164,5 +167,10 @@ class LocalScanner
         } catch (Throwable) {
             $skipped++;
         }
+    }
+
+    private function priority(\SplFileInfo $file): int
+    {
+        return in_array($file->getFilename(), ['app', 'routes', 'config', 'database', 'resources'], true) ? 0 : ($file->isDir() ? 1 : 2);
     }
 }

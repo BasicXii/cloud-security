@@ -8,6 +8,7 @@ return [
         'max_file_bytes' => 524288,
         'timeout' => 120,
         'disclose_paths' => true,
+        'excluded_directories' => array_values(array_filter(array_map('trim', explode(',', env('LENS_SCAN_EXCLUDED_DIRECTORIES', ''))))),
     ],
     'agent' => [
         'enabled' => env('LENS_AGENT_ENABLED', false),
