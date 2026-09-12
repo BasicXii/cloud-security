@@ -54,8 +54,14 @@ class CloudSecurityClient
         return $this->send('POST', '/api/v1/client/scans', ['report' => ReportPayload::validate($report)]);
     }
 
+    /** @return array<string, mixed> */
+    public function rules(): array
+    {
+        return $this->send('POST', '/api/v1/client/security/rules', []);
+    }
+
     /** @param array<string, mixed>|null $payload
-     * @return VerificationResult|array<string, mixed>
+     * @return ($payload is null ? VerificationResult : array<string, mixed>)
      */
     private function send(string $method, string $path, ?array $payload = null): VerificationResult|array
     {
@@ -77,7 +83,12 @@ class CloudSecurityClient
             }
             $pending = $this->http->acceptJson()->withToken($settings['api_key'])->withUserAgent('CloudSecurityLaravel/1.0')
                 ->withHeaders($headers)->timeout($settings['timeout'])->connectTimeout($settings['connect_timeout'])
-                ->withOptions(['verify' => $settings['verify_ssl'], 'allow_redirects' => false]);
+                ->withOptions(['verify' => $settings['verify_ssl'], 'allow_redirects' => false,
+                    'progress' => function (int $total, int $downloaded): void {
+                        if ($total > 262144 || $downloaded > 262144) {
+                            throw new ProtocolException('Cloud Security response exceeded the size limit.');
+                        }
+                    }]);
             try {
                 $response = $pending->send($method, $settings['base_url'].$path, ['body' => $body, 'headers' => ['Content-Type' => 'application/json']]);
             } catch (HttpConnectionException) {
@@ -107,6 +118,9 @@ class CloudSecurityClient
             }
             if ($response->status() !== 200) {
                 throw new ProtocolException('Cloud Security returned an unexpected response.');
+            }
+            if (strlen($response->body()) > 262144) {
+                throw new ProtocolException('Cloud Security response exceeded the size limit.');
             }
             $data = $response->json('data');
             if ($payload !== null) {

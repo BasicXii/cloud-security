@@ -185,7 +185,7 @@ The package declares PHP 8.2+ and Illuminate 11/12/13; Composer enforces each Il
 
 See the central repository's `API.md` for the exact canonical signing format and `SECURITY.md` for trust assumptions.
 
-## Local malware scanning — Phase 1
+## Local malware scanning
 
 The scanner runs in the customer application. It uses PHP tokenization and SHA-256; it does not include, require, evaluate, decompress, or execute the files it inspects. No native scanner, subprocess, queue worker, or extra Composer dependency is required by this scanner.
 
@@ -227,7 +227,7 @@ The first complete scan creates an **observation baseline**, not a trusted-clean
 
 `POST /api/v1/client/scans` accepts a single `report` object. It reuses the existing project token, agent ability, timestamp, nonce, HMAC signature, revocation, IP/domain policies and rate limiting. Successful responses use the existing signed agent response envelope. Scan IDs are unique per registered agent and local report ID. No caller-supplied project or database agent ID is accepted; both are derived from authenticated credentials and instance.
 
-The report contains `instance`, `local_id`, `status`, `mode`, `rules_version`, `scanned_at`, `summary`, and `findings`. Findings contain only `file_id`, optional `relative_path`, `sha256`, `rule_id`, `line`, `severity`, and `risk_score`. The client checks this closed schema before HTTP serialization, and the server validates it again. Unknown source/evidence fields and uploads are rejected. There is no arbitrary metadata JSON field and no source-upload endpoint. Disable `disclose_paths` when filenames themselves may reveal sensitive information. Hashes are fingerprints and should still be treated as sensitive metadata.
+The report contains `instance`, `local_id`, `status`, `mode`, `rules_version`, `scanned_at`, `summary`, and `findings`. Findings contain `file_id`, optional `relative_path`, `sha256`, `rule_id`, `line`, `severity`, and `risk_score`. Phase 2 also permits enumerated `signals`, `input_sources`, `encoding_layers`, `sink`, and `confidence`. Summary metadata can include `rules_status`. These fields contain fixed identifiers, never variable names, request keys, string literals, source snippets or arbitrary descriptions. The client checks this closed schema before HTTP serialization, and the server validates it again. Unknown source/evidence fields and uploads are rejected. There is no arbitrary metadata JSON field and no source-upload endpoint. Disable `disclose_paths` when filenames themselves may reveal sensitive information. Hashes are fingerprints and should still be treated as sensitive metadata. Existing Phase 1 reports remain accepted, including pending offline reports after a client upgrade.
 
 The cloud stores bounded reports in `security_scans`, linked to `project_agents`, rather than creating duplicate project/authentication infrastructure. The project Malware scans page uses the existing project policy, pagination, and shared UI components. It shows report history, heuristic findings, coverage, initial baseline status, and measured request-body bytes. Body bytes are not total network bandwidth: headers, TLS, retries, and other agent traffic add overhead. An unchanged scan sends a small summary with an empty finding list, not its baseline or file inventory.
 
@@ -248,6 +248,96 @@ The proposed local inspection / cloud correlation boundary is appropriate, with 
 9. Quarantine requires explicit local authorization, path containment, a fresh expected hash, race handling, rollback, and a location that cannot be served or interpreted as PHP. Removing executable permission alone does not prevent a PHP interpreter from reading a file. Phase 1 never changes inspected files.
 10. Public `.env` exposure cannot be conclusively established from local existence alone. A network check risks transmitting contents and is excluded here. Cloud request/response-body logging and third-party telemetry must also honor the metadata-only boundary.
 
-Signed rules, genuine taint analysis, resumable multi-batch delivery, exclusions with versioned scan scope, independently trusted baselines, finding correlation, remote orchestration, quarantine, alerts, Merkle synchronization, and AI explanations remain subsequent phases. CI should exercise the package across the PHP/Laravel versions advertised by its Composer manifest and Linux/Windows before publishing; local Windows validation is not proof of every hosting platform.
+Phase 2 adds signed rules and bounded input-flow analysis as described below. Full interprocedural analysis, resumable multi-batch delivery, exclusions with versioned scan scope, independently trusted baselines, finding correlation, remote orchestration, quarantine, alerts, Merkle synchronization, and AI explanations remain subsequent phases. CI should exercise the package across the PHP/Laravel versions advertised by its Composer manifest and Linux/Windows before publishing; local Windows validation is not proof of every hosting platform.
 
 Cloud deployment needs the new migration and rebuilt frontend assets. Client deployment needs the updated package; no package was published by this change.
+
+## Phase 2: analysis and scoring
+
+The bundled analyzer is now `bundled-2`, using engine compatibility version `2`. Quick scans invalidate their analysis cache when either engine or rule-pack identity changes. File rehashing remains mandatory; changed access time alone no longer makes a stable file appear concurrently modified.
+
+Supported analysis includes:
+
+- Direct superglobal input and ordinary assignment chains into evaluation, process execution, include/require, and unserialize.
+- Literal callable names assembled from short strings, escaped characters, concatenation, or constant ASCII `chr()` calls. Arbitrary code and encoded payloads are never evaluated or decompressed.
+- Known decoder propagation, nested decoding, long encoded literals, excessive escapes, repeated character construction, and variable-variable signals.
+- Separate function/method environments, explicit closure captures, arrow captures and parameter shadowing. Conditional block states are conservatively merged; a possible flow through an unknown transform receives medium confidence.
+- Laravel `request()` input, typed `Illuminate\Http\Request` parameters (including simple imports/aliases), and the Request facade. PHP in `storage/app/public`, public upload directories, logs, sessions and runtime caches contributes location signals. Compiled Blade views are not suspicious solely due to their directory.
+
+The evaluator is deliberately bounded: 100,000 retained tokens, 64 levels of analysis nesting, 500,000 analysis work steps, and 1,000 distinct findings per file. Exceeding these bounds or encountering unbalanced delimiters marks the file skipped and the scan incomplete, without advancing the baseline. These are in addition to the existing file and scan limits. Tokenizer allocation occurs before the retained-token bound; use conservative file-size limits for small PHP memory limits.
+
+This is not a complete PHP interpreter, type checker or sound whole-program taint engine. It does not resolve arbitrary application function implementations, all namespaced imports, object properties, reference aliasing, framework containers, or loop fixed points. Unknown transforms may retain possible taint; complex control flow and dynamic code can produce false positives or false negatives. Do not infer that a completed scan proves every possible runtime path was analyzed. Confidence measures support for the reported static pattern, not the probability that a file is malicious. `assert()` is not treated as an eval sink on supported PHP 8 versions, and a variable callable named `eval` is not treated as the eval language construct.
+
+Default rule weights are 20 for a process call, 40 for evaluation, 70 for decoded evaluation, 90 for input reaching execution, 80 for input-controlled inclusion, 65 for remote inclusion or input reaching unserialize, 30 for dynamic construction, 35 for obfuscation/unexpected PHP, and 40 for an upload location. Execution findings can gain 15 for upload location, 10 for unexpected storage location, 5 for a new file after an observation baseline, and 10 for nested encoding elsewhere in the file. Each correlation is added once and disclosed as a signal. Scores are capped at 100; severity thresholds are 0 informational, 1 low, 35 medium, 65 high, and 90 critical. New-file context is never described as a trusted-clean baseline.
+
+## Phase 2: signed rule packs
+
+Rule packs currently tune weights for the eleven built-in detectors. They cannot introduce PHP, commands, regexes, file paths, network destinations, or new detector implementations. Adding a new detector requires a reviewed package release and cloud schema update. No additional Composer or operating-system package is required: signature operations use PHP OpenSSL, already required by Laravel.
+
+The signing format uses RSA (at least 3072 bits), PKCS#1 v1.5 with SHA-256, and an explicitly pinned public key. The signature input is exactly these UTF-8/ASCII bytes, including two newline separators and no trailing newline:
+
+```text
+basicxii-lens-rules-v1\n<key_id>\n<base64-of-original-JSON-bytes>
+```
+
+The envelope has exactly `key_id`, `payload`, and `signature`; both payload and signature use standard base64. The payload is a JSON object with these exact keys:
+
+```json
+{
+  "schema": 1,
+  "version": 1,
+  "released_at": 1789257600,
+  "expires_at": 1791849600,
+  "minimum_engine": 2,
+  "rules": [
+    {"id": "PHP-EVAL", "score": 40},
+    {"id": "PHP-PROCESS", "score": 20},
+    {"id": "PHP-ENCODED-EVAL", "score": 70},
+    {"id": "PHP-UPLOAD", "score": 40},
+    {"id": "PHP-INPUT-EXEC", "score": 90},
+    {"id": "PHP-INPUT-INCLUDE", "score": 80},
+    {"id": "PHP-REMOTE-INCLUDE", "score": 65},
+    {"id": "PHP-INPUT-UNSERIALIZE", "score": 65},
+    {"id": "PHP-DYNAMIC-CALL", "score": 30},
+    {"id": "PHP-OBFUSCATION", "score": 35},
+    {"id": "PHP-UNEXPECTED", "score": 35}
+  ]
+}
+```
+
+Replace the example timestamps with the release's current Unix timestamps. The release cannot be more than five minutes in the future, expiry must be in the future, and validity cannot exceed 366 days. Versions are positive monotonically increasing integers, never reused for different JSON bytes. All eleven distinct detector IDs are required; scores must be JSON integers from 0 through 100. `minimum_engine` declares protocol/analyzer compatibility rather than the Composer package version, which is not yet published.
+
+On a controlled signing machine with the server application available, use an existing protected private PEM key outside the repository:
+
+```sh
+php artisan lens:rules:sign rules.json signed-rules.json --key=/private/lens-rules.pem --key-id=production-1
+```
+
+The signing command validates the declarative schema and creates a new output file; it will not overwrite an existing file. Keep private keys off the serving web application wherever possible. No private key or production artifact is generated automatically by this feature. Publish the signed output atomically at the server's configured `cloud-security.rule_artifact` path (default `storage/app/private/lens-security-rules.json`), and pin the matching public PEM under `cloud-security.rule_public_keys['production-1']` in the cloud configuration. The web endpoint verifies the artifact before serving it and returns 503 if none is configured or it is invalid/expired.
+
+Pin the public PEM independently in the customer's published config; never obtain a new trust key from the untrusted rule response:
+
+```php
+'scanner' => [
+    // Existing scan limits remain here.
+    'rule_public_keys' => [
+        'production-1' => "-----BEGIN PUBLIC KEY-----\n...\n-----END PUBLIC KEY-----\n",
+    ],
+    'minimum_rule_version' => 0,
+],
+```
+
+Then run in the customer application:
+
+```sh
+php artisan lens:rules:update
+php artisan lens:scan
+```
+
+The update command sends an empty signed POST to `/api/v1/client/security/rules`, reusing the agent authentication boundary and signed response envelope. It additionally verifies the independent artifact signature. Downloads and schema sizes are bounded. The pack is atomically cached only after verification; a bad update never replaces the previous cache. No scan automatically downloads rules, so ordinary unchanged scans retain their low-bandwidth behavior. Run the update command through the customer's existing maintenance schedule when desired.
+
+Lower versions are rejected, and a version cannot be replaced with different payload bytes. The authenticated local cache retains the highest accepted version even when an old public key is removed, so a new trusted key can only install the same payload version or a newer version. Set `minimum_rule_version` above zero to require a signed pack and prevent fallback to bundled rules on a fresh installation. For rotation, distribute the new public key through a trusted deployment channel before publishing a newer pack; for revocation, remove the compromised public key locally and deploy a trusted replacement with a newer version/minimum. A removed key cannot validate cached rules for scanning.
+
+Without a configured pack and with minimum version zero, scans use bundled rules. Offline scans may continue with a previously verified expired pack, explicitly reporting `rules_status: stale`; only an already cached pack can use this expiry exception. A newly downloaded expired pack is always rejected. A missing/invalid local state signature or removed trust key fails explicitly. Local state authentication does not defend against an attacker controlling the agent and its local secret, and offline clients cannot learn a remote key revocation until their trust configuration is updated.
+
+Phase 2 needs an updated cloud application/frontend and updated customer package, but no database migration. Rule publication is a separate operator step requiring real trusted key material. The scan dashboard preserves historical Phase 1 explanations and displays structured Phase 2 confidence, evidence, rule version, and stale status.

@@ -2,6 +2,8 @@
 
 return [
     'scanner' => [
+        'rule_public_keys' => [],
+        'minimum_rule_version' => 0,
         'max_files' => 20000,
         'max_file_bytes' => 524288,
         'timeout' => 120,

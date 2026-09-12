@@ -19,8 +19,12 @@ class LocalState
         if (is_link($directory.'/scan.lock') || is_link($directory.'/secret')) {
             throw new RuntimeException('Scanner state must not contain symbolic links.');
         }
-        $this->lock = @fopen($directory.'/scan.lock', 'c');
-        if ($this->lock === false || ! flock($this->lock, LOCK_EX | LOCK_NB)) {
+        $lock = @fopen($directory.'/scan.lock', 'c');
+        if ($lock === false) {
+            throw new RuntimeException('Scanner state is unavailable.');
+        }
+        $this->lock = $lock;
+        if (! flock($this->lock, LOCK_EX | LOCK_NB)) {
             throw new RuntimeException('Another scan is active or scanner state is unavailable.');
         }
         if (! is_file($directory.'/secret')) {
@@ -59,7 +63,11 @@ class LocalState
         if (is_link($path) || filesize($path) > 16777216) {
             throw new RuntimeException('Scanner state is invalid or exceeds its size limit.');
         }
-        $envelope = json_decode(file_get_contents($path), true, 512, JSON_THROW_ON_ERROR);
+        $contents = file_get_contents($path);
+        if ($contents === false) {
+            throw new RuntimeException('Scanner state is unreadable.');
+        }
+        $envelope = json_decode($contents, true, 512, JSON_THROW_ON_ERROR);
         if (! is_array($envelope) || ! is_string($envelope['payload'] ?? null) || ! is_string($envelope['signature'] ?? null)
             || ! hash_equals($this->identifier($envelope['payload']), $envelope['signature'])) {
             throw new RuntimeException('Scanner state authentication failed.');

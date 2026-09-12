@@ -17,22 +17,43 @@ class ReportPayload
             self::check(is_string($report[$key]) && preg_match($pattern, $report[$key]) === 1);
         }
         self::check(in_array($report['status'], ['completed', 'incomplete'], true)
-            && in_array($report['mode'], ['quick', 'full'], true) && $report['rules_version'] === PhpAnalyzer::VERSION);
+            && in_array($report['mode'], ['quick', 'full'], true) && is_string($report['rules_version'])
+            && preg_match('/^(?:bundled-[12]|signed-[1-9][0-9]{0,9}-[a-f0-9]{12})$/D', $report['rules_version']) === 1);
         self::check(is_array($report['summary']) && is_array($report['findings']) && count($report['findings']) <= 200 && array_is_list($report['findings']));
-        self::keys($report['summary'], ['discovered', 'inspected', 'unchanged', 'new', 'modified', 'deleted', 'skipped', 'findings', 'baseline_created']);
+        self::keys($report['summary'], ['discovered', 'inspected', 'unchanged', 'new', 'modified', 'deleted', 'skipped', 'findings', 'baseline_created'], ['rules_status']);
         foreach ($report['summary'] as $key => $value) {
-            self::check($key === 'baseline_created' ? is_bool($value) : (is_int($value) && $value >= 0 && $value <= 1000000));
+            self::check(match ($key) {
+                'baseline_created' => is_bool($value),
+                'rules_status' => in_array($value, ['bundled', 'verified', 'stale'], true),
+                default => is_int($value) && $value >= 0 && $value <= 1000000,
+            });
         }
         foreach ($report['findings'] as $finding) {
             self::check(is_array($finding));
-            self::keys($finding, ['file_id', 'relative_path', 'sha256', 'rule_id', 'line', 'severity', 'risk_score']);
+            self::keys($finding, ['file_id', 'relative_path', 'sha256', 'rule_id', 'line', 'severity', 'risk_score'], ['signals', 'input_sources', 'encoding_layers', 'sink', 'confidence']);
+            foreach (['signals' => RiskScorer::SIGNALS, 'input_sources' => RiskScorer::SOURCES, 'encoding_layers' => RiskScorer::ENCODERS] as $field => $allowed) {
+                if (isset($finding[$field])) {
+                    self::check(is_array($finding[$field]) && array_is_list($finding[$field]) && count($finding[$field]) <= 16);
+                    foreach ($finding[$field] as $value) {
+                        self::check(in_array($value, $allowed, true));
+                    }
+                } elseif (array_key_exists($field, $finding)) {
+                    self::check(false);
+                }
+            }
+            if (array_key_exists('sink', $finding)) {
+                self::check($finding['sink'] === null || in_array($finding['sink'], RiskScorer::SINKS, true));
+            }
+            if (array_key_exists('confidence', $finding)) {
+                self::check(in_array($finding['confidence'], ['low', 'medium', 'high'], true));
+            }
             foreach (['file_id', 'sha256'] as $key) {
                 self::check(is_string($finding[$key]) && preg_match('/^[a-f0-9]{64}$/D', $finding[$key]) === 1);
             }
             self::check($finding['relative_path'] === null || (is_string($finding['relative_path']) && strlen($finding['relative_path']) <= 300
                 && preg_match('~^(?!/)(?!.*(?:^|/)\.\.(?:/|$))[a-zA-Z0-9_./ -]+$~D', $finding['relative_path']) === 1));
-            self::check(in_array($finding['rule_id'], ['PHP-EVAL', 'PHP-PROCESS', 'PHP-ENCODED-EVAL', 'PHP-UPLOAD'], true)
-                && in_array($finding['severity'], ['low', 'medium', 'high'], true)
+            self::check(in_array($finding['rule_id'], array_keys(RiskScorer::SCORES), true)
+                && in_array($finding['severity'], ['info', 'low', 'medium', 'high', 'critical'], true)
                 && is_int($finding['line']) && $finding['line'] >= 1 && $finding['line'] <= 1000000
                 && is_int($finding['risk_score']) && $finding['risk_score'] >= 0 && $finding['risk_score'] <= 100);
         }
@@ -43,10 +64,11 @@ class ReportPayload
 
     /** @param array<string, mixed> $values
      * @param  list<string>  $keys
+     * @param  list<string>  $optional
      */
-    private static function keys(array $values, array $keys): void
+    private static function keys(array $values, array $keys, array $optional = []): void
     {
-        self::check(count($values) === count($keys) && array_diff(array_keys($values), $keys) === []);
+        self::check(array_diff($keys, array_keys($values)) === [] && array_diff(array_keys($values), [...$keys, ...$optional]) === []);
     }
 
     private static function check(bool $valid): void
