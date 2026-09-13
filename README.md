@@ -215,7 +215,7 @@ Configuration is under `cloud-security.scanner` in the published customer config
 ],
 ```
 
-Limits have hard ceilings: 50,000 eligible files, 2 MiB per file, a 3,600-second cooperative deadline, 64 nested directory separators, 200 transmitted findings per report, and 100 pending reports. The file-size ceiling is a bound on input, not total tokenizer memory. The deadline is checked between traversal and file operations; PHP cannot interrupt a blocked filesystem read portably. Lower limits for memory-constrained hosts. Reports with more than 200 findings are explicitly incomplete and preserve the earlier baseline; the first 200 findings and total observed count are retained. Complete lossless multi-batch finding delivery remains future work.
+Limits have hard ceilings: 50,000 eligible files, 2 MiB per file, a 3,600-second cooperative deadline and 64 nested directory separators. Phase 3 emits batches of 100 findings, each under 256 KiB; the API remains compatible with older reports containing up to 200. Before inspecting another file, the scanner stops at 20,000 retained findings, preserving all findings from the last analyzed file and reporting incomplete coverage. No finding already observed is discarded. A new scan refuses to start when 100 reports are pending; finish synchronizing first. The file-size ceiling bounds input, not total tokenizer memory. PHP cannot interrupt a blocked filesystem read portably. Lower limits on memory-constrained hosts.
 
 Phase 1 discovers `.php`, `.php0`–`.php9`, `.phtml`, `.phar`, and `.inc` files throughout the project, including vendor files and PHP files in storage. It excludes directories named `.git`, `node_modules`, and `basicxii-lens`, and ignores `.env`, `.env.*`, common private-key names, `.pem`, `.key`, `.crt`, and `.cer` files before reading. Symbolic links are not followed and are reported as skipped coverage. Binary PHP candidates, including binary PHARs, are skipped; archive extraction and PHP hidden inside other extensions are not implemented. Compiled Blade views are not flagged solely because they are in `storage/framework/views`.
 
@@ -341,3 +341,69 @@ Lower versions are rejected, and a version cannot be replaced with different pay
 Without a configured pack and with minimum version zero, scans use bundled rules. Offline scans may continue with a previously verified expired pack, explicitly reporting `rules_status: stale`; only an already cached pack can use this expiry exception. A newly downloaded expired pack is always rejected. A missing/invalid local state signature or removed trust key fails explicitly. Local state authentication does not defend against an attacker controlling the agent and its local secret, and offline clients cannot learn a remote key revocation until their trust configuration is updated.
 
 Phase 2 needs an updated cloud application/frontend and updated customer package, but no database migration. Rule publication is a separate operator step requiring real trusted key material. The scan dashboard preserves historical Phase 1 explanations and displays structured Phase 2 confidence, evidence, rule version, and stale status.
+
+## Phase 3: reviews, quarantine and scheduled commands
+
+Deploy the updated cloud code, run `php artisan migrate --force`, and build its frontend with `npm run build` before updating customer packages. The two additive migrations create review and security-command tables. Existing scan reports remain unchanged; run a new full scan to populate the review inbox. Deploy this package version through your normal package release process; this working tree does not publish a Composer release automatically.
+
+Merge these settings into the customer's existing published `scanner` configuration (do not replace its credentials, limits or rule keys):
+
+```php
+'commands_enabled' => env('LENS_SECURITY_COMMANDS_ENABLED', false),
+'quarantine_enabled' => env('LENS_QUARANTINE_ENABLED', false),
+```
+
+```dotenv
+LENS_SECURITY_COMMANDS_ENABLED=true
+LENS_QUARANTINE_ENABLED=false
+```
+
+Refresh cached configuration with `php artisan config:cache`. Verify connectivity with `php artisan lens:test`, run `php artisan lens:scan --full`, then run `php artisan lens:poll`. Enable quarantine separately only when your local administrator approves moving application files.
+
+Supervisor is unnecessary. Add this to the customer's `routes/console.php` and keep its normal Laravel scheduler cron running once per minute:
+
+```php
+use Illuminate\Support\Facades\Schedule;
+
+Schedule::command('lens:poll')->everyMinute()->withoutOverlapping(65);
+// Optional recurring scans; independent of one-off cloud schedules:
+Schedule::command('lens:scan')->hourly()->withoutOverlapping(65);
+```
+
+`lens:poll` makes one signed outbound HTTPS poll, executes at most one approved action in PHP and synchronizes pending scan metadata. It does not require a shell, process executor or queue worker. The local scanner lock also prevents overlapping manual, scheduled and cloud scans. Polling at one-minute intervals means a queued command normally starts on the next available poll, not at an exact second.
+
+### Cloud controls
+
+On the project's Malware scans page, expand a review card. Owners and project/team administrators can mark a finding safe, false positive, ignored once, or ignored for that file and rule. Other project viewers can read the results. Safe/false-positive decisions identify the exact agent, file, rule and hash; changed content receives a fresh review record. Ignore once reopens when a later detection arrives. Ignore rule for file covers future hashes for that agent; choosing another review decision removes that suppression. Raw scan history is preserved and review actions are audited. Quick scans do not resolve absent findings.
+
+New high/critical findings create deduplicated in-app notifications for the personal project owner or team owner. Notifications contain counts and a local dashboard link, never source snippets. Email, Slack, Teams and webhook delivery remain future channels.
+
+The Security commands panel supports approved immediate or one-off scheduled quick scans, full scans, signed-rule refreshes and baseline rebuilds. Times are UTC. A baseline rebuild performs full analysis and replaces the baseline only after complete local coverage. Commands have no arbitrary arguments. Pending commands expire 24 hours after their scheduled time and can be cancelled before delivery. Permission is checked again when the client polls. Scheduling remains durable in the database while the client is offline; no cloud scheduler worker is needed for one-off commands.
+
+### Quarantine and recovery
+
+Expand **Quarantine this file**, review its exact SHA-256, and explicitly approve the move. Local `quarantine_enabled` must also be true. Only the opaque file identifier and reviewed hash are sent to the client. The client resolves its signed local path map, rejects symlinks/out-of-root paths, verifies the current hash and moves the file into its private `storage/basicxii-lens/<instance-hash>/quarantine-<command-id>.bin`. The file loses executable permission where supported. This directory must never be exposed by the web server. A `.bin` extension and permissions do not prevent a compromised PHP process from reading the file.
+
+Original relative path, hash, permissions and operation state remain in signed local metadata. Contents are never uploaded and no automatic deletion exists. A successful receipt marks matching cloud findings quarantined. Results are acknowledged on the next poll. If the process crashes, the command is reported `interrupted` rather than executed twice; review the local metadata and file before requesting another action.
+
+After reviewing the quarantined file locally, recover it with:
+
+```sh
+php artisan lens:quarantine:restore COMMAND_ID --approve
+php artisan lens:scan --full
+```
+
+Recovery validates local metadata and the stored hash and refuses to overwrite an existing destination or traverse symlinks. The new full scan can reopen restored findings. Keep backups: local state signatures cannot defend against an attacker who controls both the scanner process and its local signing secret.
+
+### Offline synchronization and limits
+
+Every observed finding is saved in an authenticated local batch before advancing the baseline. Each batch has its own stable report UUID and shared batch identifier/index/count. Cloud retries are idempotent; conflicting or inconsistent batches are rejected. The cloud keeps a batch group incomplete until every part arrives and the finding counts agree. The dashboard labels the individual batch cards.
+
+```sh
+php artisan lens:scan --local
+php artisan lens:scan --sync
+```
+
+Acknowledged files are removed from the spool; failed requests retain pending metadata. Retry after connectivity or rate limits recover. `lens:poll` also retries pending metadata and signed command receipts. A crash before all batches are saved preserves the previous baseline so a subsequent scan rechecks those files. A local completed scan means coverage completed; cloud completion additionally requires delivery of every batch. Skipped coverage still makes a scan incomplete. Source files uploaded remains zero in every case.
+
+Old reports that already lost findings under the Phase 1/2 limit cannot recover them by synchronization alone: run a fresh `--full` scan with this package. Changing directory exclusions now invalidates comparison scope, so excluded vendor files are not falsely counted as deleted. Skipped path details remain bounded to the first 100 entries and respect path-disclosure settings.

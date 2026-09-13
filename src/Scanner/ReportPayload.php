@@ -20,10 +20,19 @@ class ReportPayload
             && in_array($report['mode'], ['quick', 'full'], true) && is_string($report['rules_version'])
             && preg_match('/^(?:bundled-[12]|signed-[1-9][0-9]{0,9}-[a-f0-9]{12})$/D', $report['rules_version']) === 1);
         self::check(is_array($report['summary']) && is_array($report['findings']) && count($report['findings']) <= 200 && array_is_list($report['findings']));
-        self::keys($report['summary'], ['discovered', 'inspected', 'unchanged', 'new', 'modified', 'deleted', 'skipped', 'findings', 'baseline_created'], ['rules_status', 'skipped_files']);
+        self::keys($report['summary'], ['discovered', 'inspected', 'unchanged', 'new', 'modified', 'deleted', 'skipped', 'findings', 'baseline_created'], ['rules_status', 'skipped_files', 'batch']);
+        if (isset($report['summary']['batch'])) {
+            $batch = $report['summary']['batch'];
+            self::check(is_array($batch));
+            self::keys($batch, ['id', 'index', 'count']);
+            self::check(is_string($batch['id']) && preg_match('/^[a-f0-9-]{36}$/D', $batch['id']) === 1
+                && is_int($batch['index']) && is_int($batch['count']) && $batch['count'] >= 2 && $batch['count'] <= 210
+                && $batch['index'] >= 0 && $batch['index'] < $batch['count']);
+        }
         foreach ($report['summary'] as $key => $value) {
             self::check(match ($key) {
                 'baseline_created' => is_bool($value),
+                'batch' => true,
                 'rules_status' => in_array($value, ['bundled', 'verified', 'stale'], true),
                 'skipped_files' => is_array($value) && array_is_list($value) && count($value) <= 100 && collect($value)->every(fn ($item) => is_array($item) && array_keys($item) === ['path', 'reason'] && ($item['path'] === null || is_string($item['path'])) && is_string($item['reason'])),
                 default => is_int($value) && $value >= 0 && $value <= 1000000,

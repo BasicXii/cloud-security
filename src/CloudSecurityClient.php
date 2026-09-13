@@ -60,6 +60,21 @@ class CloudSecurityClient
         return $this->send('POST', '/api/v1/client/security/rules', []);
     }
 
+    /** @param array{id: string, result: string}|null $receipt
+     * @return array<string, mixed>
+     */
+    public function securityPoll(string $instance, ?array $receipt = null): array
+    {
+        if (! preg_match('/^[a-zA-Z0-9_-]{1,80}$/D', $instance)
+            || ($receipt !== null && (array_diff(array_keys($receipt), ['id', 'result']) !== []
+                || ! is_string($receipt['id'] ?? null) || ! preg_match('/^[0-9A-HJKMNP-TV-Z]{26}$/Di', $receipt['id'])
+                || ! in_array($receipt['result'] ?? null, ['succeeded', 'incomplete', 'rejected', 'failed', 'interrupted'], true)))) {
+            throw new ProtocolException('Invalid security polling metadata.');
+        }
+
+        return $this->send('POST', '/api/v1/client/security/poll', ['instance' => $instance, 'receipt' => $receipt]);
+    }
+
     /** @param array<string, mixed>|null $payload
      * @return ($payload is null ? VerificationResult : array<string, mixed>)
      */

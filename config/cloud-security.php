@@ -2,6 +2,8 @@
 
 return [
     'scanner' => [
+        'commands_enabled' => env('LENS_SECURITY_COMMANDS_ENABLED', false),
+        'quarantine_enabled' => env('LENS_QUARANTINE_ENABLED', false),
         'rule_public_keys' => [],
         'minimum_rule_version' => 0,
         'max_files' => 20000,

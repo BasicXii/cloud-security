@@ -31,14 +31,21 @@ class LocalScanner
         $summary['baseline_created'] = $baseline === null;
         $summary['rules_status'] = $pack === null ? 'bundled' : ($pack->expiresAt <= time() ? 'stale' : 'verified');
         $files = [];
+        $paths = $state->read('paths.json') ?? [];
         $findings = [];
         $deadline = microtime(true) + max(1, min(3600, $limits['timeout'] ?? 120));
         $maximum = max(1, min(50000, $limits['max_files'] ?? 20000));
         $sizeLimit = max(1, min(2097152, $limits['max_file_bytes'] ?? 524288));
         $discoverySkipped = 0;
         $excludedDirectories = array_values(array_filter(array_map(fn ($value) => trim((string) $value), $limits['excluded_directories'] ?? [])));
-        foreach ($this->discover($root, '', $discoverySkipped, $deadline, $excludedDirectories) as $path => $absolute) {
-            if ($summary['discovered'] >= $maximum || microtime(true) >= $deadline) {
+        sort($excludedDirectories);
+        $scope = hash('sha256', json_encode($excludedDirectories, JSON_THROW_ON_ERROR));
+        if (($baseline['scope'] ?? hash('sha256', '[]')) !== $scope) {
+            $previous = [];
+            $full = true;
+        }
+        foreach ($this->discover($root, '', $discoverySkipped, $deadline, $excludedDirectories, $skippedFiles, $limits) as $path => $absolute) {
+            if ($summary['discovered'] >= $maximum || microtime(true) >= $deadline || count($findings) >= 20000) {
                 $summary['skipped']++;
                 $this->recordSkipped($skippedFiles, $path, 'scan_limit_reached', $limits);
                 break;
@@ -72,6 +79,7 @@ class LocalScanner
             }
             $hash = hash('sha256', $source);
             $id = $state->identifier($path);
+            $paths[$id] = $path;
             $files[$id] = ['sha256' => $hash, 'size' => strlen($source), 'mtime' => $after['mtime']];
             $event = ! isset($previous[$id]) ? 'new' : ($previous[$id]['sha256'] === $hash ? 'unchanged' : 'modified');
             $summary[$event]++;
@@ -89,16 +97,14 @@ class LocalScanner
             }
             foreach ($analysis as $finding) {
                 $summary['findings']++;
-                if (count($findings) < 200) {
-                    $safePath = ($limits['disclose_paths'] ?? true) && strlen($path) <= 300
-                        && preg_match('~^(?!/)(?!.*(?:^|/)\.\.(?:/|$))[a-zA-Z0-9_./ -]+$~D', $path) ? $path : null;
-                    $findings[] = ['file_id' => $id, 'relative_path' => $safePath, 'sha256' => $hash, ...$finding];
-                }
+                $safePath = ($limits['disclose_paths'] ?? true) && strlen($path) <= 300
+                    && preg_match('~^(?!/)(?!.*(?:^|/)\.\.(?:/|$))[a-zA-Z0-9_./ -]+$~D', $path) ? $path : null;
+                $findings[] = ['file_id' => $id, 'relative_path' => $safePath, 'sha256' => $hash, ...$finding];
             }
         }
         $summary['skipped'] += $discoverySkipped;
         $summary['skipped_files'] = $skippedFiles;
-        $complete = $summary['skipped'] === 0 && $summary['findings'] <= 200;
+        $complete = $summary['skipped'] === 0;
         $summary['baseline_created'] = $baseline === null && $complete;
         if ($complete) {
             $summary['deleted'] = count(array_diff_key($previous, $files));
@@ -108,12 +114,26 @@ class LocalScanner
         $report = ['instance' => $instance, 'local_id' => $uuid, 'status' => $complete ? 'completed' : 'incomplete',
             'mode' => $full ? 'full' : 'quick', 'rules_version' => $rulesVersion, 'scanned_at' => gmdate('Y-m-d\TH:i:s\Z'),
             'summary' => $summary, 'findings' => $findings];
-        $state->save('report-'.$uuid.'.json', $report);
+        $batches = array_chunk($findings, 100) ?: [[]];
+        $firstPage = null;
+        foreach ($batches as $index => $batch) {
+            $page = $report;
+            $page['findings'] = $batch;
+            if (count($batches) > 1) {
+                $page['summary']['batch'] = ['id' => $uuid, 'index' => $index, 'count' => count($batches)];
+                $digest = hash('sha256', $uuid.'|'.$index);
+                $page['local_id'] = substr($digest, 0, 8).'-'.substr($digest, 8, 4).'-4'.substr($digest, 13, 3).'-a'.substr($digest, 17, 3).'-'.substr($digest, 20, 12);
+            }
+            ReportPayload::validate($page);
+            $state->save('report-'.$page['local_id'].'.json', $page);
+            $firstPage ??= $page;
+        }
+        $state->save('paths.json', $paths);
         if ($complete) {
-            $state->save('baseline.json', ['engine' => RulePack::ENGINE, 'rules_version' => $rulesVersion, 'files' => $files]);
+            $state->save('baseline.json', ['engine' => RulePack::ENGINE, 'rules_version' => $rulesVersion, 'scope' => $scope, 'files' => $files]);
         }
 
-        return $report;
+        return $firstPage;
     }
 
     /** @param list<array{path: ?string, reason: string}> $skippedFiles */
@@ -122,15 +142,17 @@ class LocalScanner
         if (count($skippedFiles) >= 100) {
             return;
         }
-        $safePath = ($limits['disclose_paths'] ?? true) && strlen($path) <= 300 ? $path : null;
+        $safePath = ($limits['disclose_paths'] ?? true) && strlen($path) <= 300
+            && preg_match('~^(?!/)(?!.*(?:^|/)\.\.(?:/|$))[a-zA-Z0-9_./ -]+$~D', $path) ? $path : null;
         $skippedFiles[] = ['path' => $safePath, 'reason' => $reason];
     }
 
     /** @return Generator<string, string> */
-    private function discover(string $root, string $relative, int &$skipped, float $deadline, array $excludedDirectories = []): Generator
+    private function discover(string $root, string $relative, int &$skipped, float $deadline, array $excludedDirectories, array &$skippedFiles, array $limits): Generator
     {
         if (substr_count($relative, '/') >= 64) {
             $skipped++;
+            $this->recordSkipped($skippedFiles, $relative, 'discovery_failed', $limits);
 
             return;
         }
@@ -143,6 +165,7 @@ class LocalScanner
                 }
                 if (microtime(true) >= $deadline) {
                     $skipped++;
+                    $this->recordSkipped($skippedFiles, $relative, 'scan_limit_reached', $limits);
 
                     return;
                 }
@@ -155,17 +178,19 @@ class LocalScanner
                 }
                 if ($file->isLink()) {
                     $skipped++;
+                    $this->recordSkipped($skippedFiles, $path, 'symbolic_link', $limits);
 
                     continue;
                 }
                 if ($file->isDir()) {
-                    yield from $this->discover($root, $path, $skipped, $deadline, $excludedDirectories);
+                    yield from $this->discover($root, $path, $skipped, $deadline, $excludedDirectories, $skippedFiles, $limits);
                 } elseif ($file->isFile() && preg_match('/\.(?:php[0-9]?|phtml|phar|inc)$/i', $name)) {
                     yield $path => $file->getPathname();
                 }
             }
         } catch (Throwable) {
             $skipped++;
+            $this->recordSkipped($skippedFiles, $relative, 'discovery_failed', $limits);
         }
     }
 

@@ -53,6 +53,11 @@ class LocalState
         return hash_hmac('sha256', $path, $this->secret);
     }
 
+    public function directory(): string
+    {
+        return $this->directory;
+    }
+
     /** @return array<string, mixed>|null */
     public function read(string $name): ?array
     {
